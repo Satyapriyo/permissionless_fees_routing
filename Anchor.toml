@@ -1,0 +1,30 @@
+[toolchain]
+package_manager = "yarn"
+
+[features]
+resolution = true
+skip-lint = false
+allow-missing-optionals = false
+
+[programs.localnet]
+honorary_fee_position = "Y6S8ztXqBsRsj9husmE2PmLm3cLqbfwbmf1o1KNFsNk"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "anchor test -- --features local-testing"
+# test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[test]
+startup_wait = 10000  # Wait 10 seconds instead of default
+shutdown_wait = 2000
+upgradeable = false
+
+# [test.validator]
+# port = 8900  # Use a different port
+# host = "127.0.0.1"
