@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, TokenAccount, Token, Transfer};
 //use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::associated_token::AssociatedToken;
 //use std::convert::TryInto;
 
 
@@ -15,7 +16,7 @@ declare_id!("Y6S8ztXqBsRsj9husmE2PmLm3cLqbfwbmf1o1KNFsNk");
 */
 
 const DAY_SECONDS: i64 = 86_400;
-const PAGE_RECORD_CAP: usize = 50;
+const PAGE_RECORD_CAP: usize = 10; // Reduced to stay under 10KB limit
 
 #[program]
 pub mod honorary_fee_position {
@@ -199,8 +200,9 @@ pub mod honorary_fee_position {
             page_dust = page_dust.saturating_add(rounding_leftover);
         }
 
-        // 9) Idempotency: check progress.page_records
-        if progress.page_records.iter().any(|r| r.page_index == page_index) {
+        // 9) Idempotency: check progress.page_records (fix type conversion)
+        let page_index_u32 = page_index as u32; // Convert u64 to u32
+        if progress.page_records.iter().any(|r| r.page_index == page_index_u32) {
             // If already processed, emit event & return success (idempotent)
             emit!(InvestorPayoutPage {
                 day_ts: progress.day_start_ts,
@@ -217,10 +219,11 @@ pub mod honorary_fee_position {
         }
 
         // 10) Transfer payouts from program_quote_treasury to investors
-        // Must sign with investor_fee_pos_owner PDA
+        // Must sign with investor_fee_pos_owner PDA (fix borrowed value)
+        let vault_key = ctx.accounts.vault.key();
         let seeds: &[&[u8]] = &[
             b"vault",
-            ctx.accounts.vault.key.as_ref(),
+            vault_key.as_ref(),
             b"investor_fee_pos_owner",
             &[investor_fee_pos_owner_bump],
         ];
@@ -248,10 +251,14 @@ pub mod honorary_fee_position {
             
             token::transfer(cpi_ctx, *amount)?;
         }
-        // 11) Update progress: cumulative, carry, records, cursor
+        // 11) Update progress: cumulative, carry, records, cursor (fix timestamp type)
         progress.cumulative_distributed_today = progress.cumulative_distributed_today.saturating_add(page_total_payout);
         progress.carry_lamports = progress.carry_lamports.saturating_add(page_dust);
-        progress.page_records.push(PageRecord { page_index, distributed: page_total_payout, timestamp: now_ts });
+        progress.page_records.push(PageRecord { 
+            page_index: page_index_u32, 
+            distributed: page_total_payout, 
+            timestamp: now_ts 
+        });
         if page_index > progress.cursor {
             progress.cursor = page_index;
         }
@@ -306,7 +313,6 @@ pub mod honorary_fee_position {
 /// ---------------------------------------------------------------------------
 
 #[derive(Accounts)]
-#[instruction(bump_owner: u8)]
 pub struct InitializeHonoraryPosition<'info> {
     #[account(mut)]
     pub initializer: Signer<'info>,
@@ -332,8 +338,12 @@ pub struct InitializeHonoraryPosition<'info> {
     pub honorary_position: UncheckedAccount<'info>,
 
     ///  Program quote treasury ATA (owned by the investor_fee_pos_owner_pda)
-    #[account(init, payer = initializer, token::mint = pool_quote_mint, token::authority = investor_fee_pos_owner_pda)]
-    pub program_quote_treasury: Account<'info, TokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = initializer,
+        associated_token::mint = pool_quote_mint,
+        associated_token::authority = investor_fee_pos_owner_pda)]
+        pub program_quote_treasury: Account<'info, TokenAccount>,
 
     /// CHECK: Pool & mints (used for validation)
     pub pool: UncheckedAccount<'info>,
@@ -346,6 +356,7 @@ pub struct InitializeHonoraryPosition<'info> {
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
 #[derive(Accounts)]
@@ -423,10 +434,10 @@ impl Progress {
 pub struct PageRecord {
     pub page_index: u32,
     pub distributed: u64,
-    pub timestamp: i32,
+    pub timestamp: i64, // Changed from i32 to i64
 }
 impl PageRecord {
-    pub const SIZE: usize = 4 + 8 + 4;
+    pub const SIZE: usize = 4 + 8 + 8; // Updated size for i64 timestamp
 }
 
 #[derive(Clone)]

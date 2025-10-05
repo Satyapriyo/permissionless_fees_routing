@@ -10,8 +10,8 @@ pub mod streamflow_stub {
     use super::*;
 
     pub fn get_locked_amount(_ctx: Context<GetLockInfoStub>) -> Result<StreamLockInfo> {
-        // Simulate that this investor still has 80% of their tokens locked
-        Ok(StreamLockInfo { locked_amount: 800_000 })
+        // Return hardcoded value for testing
+        Ok(StreamLockInfo { locked_amount: 100_000 })
     }
 }
 
