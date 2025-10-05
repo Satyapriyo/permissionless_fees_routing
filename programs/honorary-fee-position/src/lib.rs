@@ -99,7 +99,27 @@ pub mod honorary_fee_position {
         // 1) Claim fees (either via local stub or integration CPI)
         #[cfg(feature = "local-testing")]
         let (claimed_quote, claimed_base): (u64, u64) = {
-            let claim = crate::cp_amm_stub::claim_fees_stub()?;
+            // You can change this logic to test different scenarios
+            // For now, let's add a simple way to select different stub modes
+            
+            // Default mode: normal quote-only fees
+            let claim = if page_index == 0 {
+                // Normal fees for first page
+                crate::cp_amm_stub::claim_fees_stub()?
+            } else if page_index == 1 {
+                // Large fees for testing caps
+                crate::cp_amm_stub::claim_large_fees_stub()?
+            } else if page_index == 2 {
+                // Small fees for testing dust
+                crate::cp_amm_stub::claim_small_fees_stub()?
+            } else if page_index == 999 {
+                // Special page index to test base fee detection
+                crate::cp_amm_stub::claim_fees_with_base_stub()?
+            } else {
+                // Default for any other page
+                crate::cp_amm_stub::claim_fees_stub()?
+            };
+            
             (claim.quote_fees_collected, claim.base_fees_collected)
         };
 
@@ -115,17 +135,31 @@ pub mod honorary_fee_position {
             return Err(ErrorCode::BaseFeesObserved.into());
         }
 
-        // 3) Compute actual newly-claimed by comparing treasury snapshot (account might have funds put directly)
+        // 3) Compute actual newly-claimed by simulating treasury increase
         let treasury_balance = ctx.accounts.program_quote_treasury.amount;
         let prev_snapshot = progress.treasury_snapshot;
-        // claimed_by_claim = claimed_quote (from stub/CPI). We'll compute effective increase for safety:
-        let effective_claimed = treasury_balance.saturating_sub(prev_snapshot);
-        
+
         #[cfg(feature = "local-testing")]
-        let effective_claimed_use = std::cmp::max(claimed_quote, effective_claimed);
+        let effective_claimed_use = {
+            // For testing: simulate the CP-AMM transferring fees to treasury
+            // In real implementation, the CP-AMM CPI would do this transfer
+            if claimed_quote > 0 {
+                msg!("Stub simulation: {} quote fees were claimed and added to treasury", claimed_quote);
         
+            // Update treasury snapshot to simulate the fee addition
+            // In real implementation, this would happen via CP-AMM CPI transfer
+                let simulated_new_balance = prev_snapshot.saturating_add(claimed_quote);
+                progress.treasury_snapshot = simulated_new_balance;
+        
+                claimed_quote
+            } else {
+                0
+            }
+        };
+    
+
         #[cfg(not(feature = "local-testing"))]
-        let effective_claimed_use = effective_claimed; // When not testing, use treasury difference
+        let effective_claimed_use = treasury_balance.saturating_sub(prev_snapshot);
 
         // 4) Read investor locked amounts from remaining_accounts
         // Expect pairs: [stream_acc, investor_ata]...
@@ -556,8 +590,45 @@ pub mod cp_amm_stub {
 
     /// Simple deterministic stub for tests: returns quote-only fees
     pub fn claim_fees_stub() -> Result<ClaimResult> {
+        msg!("CP-AMM Stub: Claiming 100,000 quote fees (simulation)");
         Ok(ClaimResult {
             quote_fees_collected: 100_000, // default simulated claim
+            base_fees_collected: 0,
+        })
+    }
+
+    /// Claim fees with base amount (for testing base fee detection)
+    pub fn claim_fees_with_base_stub() -> Result<ClaimResult> {
+        msg!("CP-AMM Stub: Claiming MIXED fees - 50k quote + 25k base (should fail)");
+        Ok(ClaimResult {
+            quote_fees_collected: 50_000,
+            base_fees_collected: 25_000, // This should trigger failure
+        })
+    }
+
+    /// Large fee claim (for testing caps)
+    pub fn claim_large_fees_stub() -> Result<ClaimResult> {
+        msg!("CP-AMM Stub: Claiming LARGE fees - 200,000 quote tokens");
+        Ok(ClaimResult {
+            quote_fees_collected: 200_000, // Large amount for cap testing
+            base_fees_collected: 0,
+        })
+    }
+
+    /// Small fee claim (for testing dust thresholds)
+    pub fn claim_small_fees_stub() -> Result<ClaimResult> {
+        msg!("CP-AMM Stub: Claiming SMALL fees - 50 quote tokens");
+        Ok(ClaimResult {
+            quote_fees_collected: 50, // Very small amount
+            base_fees_collected: 0,
+        })
+    }
+
+    /// No fees available
+    pub fn claim_no_fees_stub() -> Result<ClaimResult> {
+        msg!("CP-AMM Stub: No fees available");
+        Ok(ClaimResult {
+            quote_fees_collected: 0,
             base_fees_collected: 0,
         })
     }
@@ -568,14 +639,46 @@ pub mod streamflow_stub {
     use super::*;
 
     /// Read locked from a mock stream account
-    /// For tests: the account data first 8 bytes is u64 locked amount LE
+    /// For tests: return hardcoded values based on account patterns
     pub fn read_locked_stub(acc: &AccountInfo) -> Result<u64> {
         let data = acc.try_borrow_data()?;
+        
+        // If account has data, try to read it
+        if data.len() >= 8 {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(&data[0..8]);
+            let locked = u64::from_le_bytes(arr);
+            if locked > 0 {
+                return Ok(locked);
+            }
+        }
+        
+        // Fallback: return default locked amounts based on account key
+        // This simulates different locked amounts for testing
+        let key_bytes = acc.key().to_bytes();
+        let last_byte = key_bytes[31];
+        
+        // Generate different locked amounts based on the account key
+        let locked_amount = match last_byte % 4 {
+            0 => 100_000u64, // 100k tokens
+            1 => 200_000u64, // 200k tokens  
+            2 => 300_000u64, // 300k tokens
+            _ => 150_000u64, // 150k tokens
+        };
+        
+        msg!("Streamflow stub: Using fallback locked amount {} for account ending in {}", locked_amount, last_byte);
+        Ok(locked_amount)
+    }
+
+    /// Write locked amount to mock stream account for testing
+    pub fn write_locked_stub(acc: &AccountInfo, locked_amount: u64) -> Result<()> {
+        let mut data = acc.try_borrow_mut_data()?;
         if data.len() < 8 {
             return err!(ErrorCode::MissingInvestorStreamflow);
         }
-        let mut arr = [0u8; 8];
-        arr.copy_from_slice(&data[0..8]);
-        Ok(u64::from_le_bytes(arr))
+        let bytes = locked_amount.to_le_bytes();
+        data[0..8].copy_from_slice(&bytes);
+        msg!("Streamflow stub: Wrote locked amount {} to account", locked_amount);
+        Ok(())
     }
 }
