@@ -42,22 +42,33 @@ npm install
 # Build the program
 anchor build
 
+# Start local validator in new terminal
+solana-test-validator
+
 # Deploy to localnet (for testing)
-anchor deploy --provider.cluster localnet
+anchor deploy 
 ```
+After deploying update the programId that you just got to
+```
+programs/honorary-fee-position/src/lib.rs
+
+Anchor.toml
+```
+
 
 ### Running Tests
 
 ```bash
-# Start local validator
+# Start local validator in new terminal if not running
 solana-test-validator
 
-# Run comprehensive test suite
-anchor test --provider.cluster localnet
+# Deploy first if not deployed
+anchor deploy
 
-# Run specific test scenarios
-anchor test --grep "partial locks"
-anchor test --grep "base fee detection"
+# Stop the local validator of other terminal and run comprehensive test suite
+anchor test 
+
+
 ```
 
 ## 🏗️ Integration Guide
@@ -394,16 +405,9 @@ The comprehensive test suite covers all critical scenarios:
 
 ### Test Execution
 ```bash
-# Run all tests
-anchor test --provider.cluster localnet
+# Run all tests(No need to start local validator this starts one automatically)
+anchor test 
 
-# Run specific scenarios
-anchor test --grep "handles all investors unlocked"
-anchor test --grep "fails on base fee detection"
-anchor test --grep "handles dust and daily cap behavior"
-
-# Verbose test output
-anchor test --provider.cluster localnet -- --nocapture
 ```
 
 ### Test Data Validation
